@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Adafruit_MAX31865.h>
 
 
 // --- Application setup: ---
@@ -21,6 +22,7 @@
 #define PIN_PUMP_RELAIS 5
 #define STATE_PUMP_ON  HIGH // Relais is off, but pump is on! This is done for security reasons.
 #define STATE_PUMP_OFF LOW // Relais is on, but pump is off! This is done for security reasons.
+uint8_t pumpPowerInPercentage_m = 100;
 
 
 // --- Display setup: ---
@@ -31,11 +33,18 @@ Adafruit_SSD1306 display(OLED_RESET);
 #endif
 
 
+// --- MAX31865 temperature sensor setup:
+Adafruit_MAX31865 thermo = Adafruit_MAX31865(10, 11, 12, 13); // Use software SPI: CS, DI, DO, CLK
+#define RREF      430.0 // The value of the Rref resistor. Use 430.0 for PT100 and 4300.0 for PT1000
+#define RNOMINAL  100.0 // The 'nominal' 0-degrees-C resistance of the sensor, 100.0 for PT100, 1000.0 for PT1000
+
+
 // --- DS18B20 temperature sensor setup: ---
 #define ONE_WIRE_BUS 3 // Data wire is plugged into port 3 of controller.
 #define TEMPERATURE_PRECISION 12 // The precision of the conected sensors are set to 12 bit.
 OneWire oneWire(ONE_WIRE_BUS); // Setup the one wire bus.
 DallasTemperature sensors(&oneWire); // Pass the oneWire reference to Dallas Temperature driver.
+float tempExhaust_m = 0;
 
 // Definition of DS18B20 temperature sensor addresses:
 DeviceAddress sensAddrHeatExchangerWaterTemp      = {0x28, 0x53, 0x0B, 0x79, 0xA2, 0x19, 0x03, 0x27};
@@ -47,7 +56,6 @@ DeviceAddress sensAddrWaterInput2Temp             = {0x28, 0xFF, 0xEE, 0xC1, 0x5
 DeviceAddress sensAddrWaterOutput1Temp            = {0x28, 0xFF, 0x64, 0x81, 0x55, 0x16, 0x03, 0xFA}; // TempSens03, left one , near oven, installed at 09.02.2019.
 DeviceAddress sensAddrWaterOutput2Temp            = {0x28, 0xFF, 0xB2, 0xD5, 0x55, 0x16, 0x03, 0xEE}; // TempSens04, right one , further away from the oven, installed at 09.02.2019.
 DeviceAddress sensAddrIntakeAirTemp               = {0x28, 0x89, 0xD3, 0x79, 0x97, 0x07, 0x03, 0x97};
-
 float tempHeatExchangerWater_m = 0;
 float tempHeatExchangerOutsideTop_m = 0;
 float tempHeatExchangerOutsideMid_m = 0;
@@ -57,10 +65,6 @@ float tempWaterInput2_m = 0;
 float tempWaterOutput1_m = 0;
 float tempWaterOutput2_m = 0;
 float tempIntakeAir_m = 0;
-//float tempExhaust_m = 0;
-
-uint8_t pumpPowerInPercentage_m = 100;
-
 
 
 /// ==================================================================================================
@@ -79,6 +83,9 @@ void setup()
   // Switch Pump on:
   // This is done for safety purpose!
   setPumpPower(100);
+
+  // Init MAX31865 library:
+  thermo.begin(MAX31865_3WIRE);  // set to 2WIRE or 4WIRE as necessary
 
   // Init DS18B20 library:
   sensors.begin();
@@ -176,6 +183,7 @@ void printAddress(DeviceAddress deviceAddress)
 /// ==================================================================================================
 void sampleTemperatures()
 {
+  // DS18B20 temperatures:
   sensors.requestTemperatures();
   tempHeatExchangerWater_m = sensors.getTempC(sensAddrHeatExchangerWaterTemp);
   tempHeatExchangerOutsideTop_m = sensors.getTempC(sensAddrHeatExchangerOutsideTopTemp);
@@ -186,7 +194,36 @@ void sampleTemperatures()
   tempWaterOutput1_m = sensors.getTempC(sensAddrWaterOutput1Temp);
   tempWaterOutput2_m = sensors.getTempC(sensAddrWaterOutput2Temp);
   tempIntakeAir_m = sensors.getTempC(sensAddrIntakeAirTemp);
-  //tempExhaust_m = sensors.getTempC(sensAddrExhaustTemp);
+
+  // PT1000 temperatures:
+  tempExhaust_m = thermo.temperature(RNOMINAL, RREF);
+
+  // TODO: Return error codes in this method!
+  // Check and print any faults
+  //  uint8_t fault = thermo.readFault();
+  //  if (fault) {
+  //    Serial.print("Fault 0x"); Serial.println(fault, HEX);
+  //    if (fault & MAX31865_FAULT_HIGHTHRESH) {
+  //      Serial.println("RTD High Threshold"); 
+  //    }
+  //    if (fault & MAX31865_FAULT_LOWTHRESH) {
+  //      Serial.println("RTD Low Threshold"); 
+  //    }
+  //    if (fault & MAX31865_FAULT_REFINLOW) {
+  //      Serial.println("REFIN- > 0.85 x Bias"); 
+  //    }
+  //    if (fault & MAX31865_FAULT_REFINHIGH) {
+  //      Serial.println("REFIN- < 0.85 x Bias - FORCE- open"); 
+  //    }
+  //    if (fault & MAX31865_FAULT_RTDINLOW) {
+  //      Serial.println("RTDIN- < 0.85 x Bias - FORCE- open"); 
+  //    }
+  //    if (fault & MAX31865_FAULT_OVUV) {
+  //      Serial.println("Under/Over voltage"); 
+  //    }
+  //    thermo.clearFault();
+  //  }
+  //  Serial.println();
 }
 
 
@@ -284,10 +321,10 @@ float getTempOfIntakeAir()
 /// @brief This method returns the temperatures of Exhaust.
 ///
 /// ==================================================================================================
-//float getTempOfExhaust()
-//{
-//  return tempExhaust_m;
-//}
+float getTempOfExhaust()
+{
+  return tempExhaust_m;
+}
 
 
 /// ==================================================================================================
@@ -354,8 +391,8 @@ void outputDataToDisplay()
   display.println("C"); 
 
   display.print("Abgas:    ");
-//  display.print(getTempOfExhaust());
-  display.print("220.90 ");
+  display.print(getTempOfExhaust());
+  display.print(" ");
   display.write(0xF7);
   display.println("C"); 
   
@@ -402,8 +439,7 @@ void outputDataToSerialMonitor()
   Serial.println(" °C");
     
   Serial.print("Abgas:      ");
-  Serial.print("220.00");
-  //Serial.print(getTempOfExhaust());
+  Serial.print(getTempOfExhaust());
   Serial.println(" °C");
       
   Serial.print("Einlassluft: ");
@@ -449,9 +485,8 @@ void outputDataToSerialPlotter()
   //Serial.print(getTempOfWaterOutput2());
   //Serial.print(",");
     
-  //Serial.print(getTempOfExhaust());
-  //Serial.print("0.0");
-  //Serial.print(",");
+  Serial.print(getTempOfExhaust());
+  Serial.print(",");
       
   //Serial.print(getTempOfIntakeAir());
   //Serial.print(",");
